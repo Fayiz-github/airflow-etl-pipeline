@@ -1,0 +1,106 @@
+version: '3'
+
+x-airflow-common:
+  &airflow-common
+  image: apache/airflow:2.9.3
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__FERNET_KEY: '0NJc3CZeoy24QuWo0tFFdN6kD_cd-a8rPuVMJUPKhfI='
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    # FIX: explicit lock_timeout in connection string prevents the cold-start
+    # advisory lock race between the scheduler and postgres at container startup.
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow?connect_timeout=10&options=-c%20lock_timeout%3D30s
+    AIRFLOW__WEBSERVER__SECRET_KEY: 'a_very_secret_key_change_in_prod'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: UTC
+    _AIRFLOW_DB_MIGRATE: 'true'
+    # ── SMTP / Email alerts ───────────────────────────────────────────────────
+    AIRFLOW_ALERT_EMAIL: '${AIRFLOW_ALERT_EMAIL}'
+    AIRFLOW__SMTP__SMTP_HOST: smtp.gmail.com
+    AIRFLOW__SMTP__SMTP_STARTTLS: 'true'
+    AIRFLOW__SMTP__SMTP_SSL: 'false'
+    AIRFLOW__SMTP__SMTP_PORT: '587'
+    AIRFLOW__SMTP__SMTP_USER: '${AIRFLOW_ALERT_EMAIL}'
+    AIRFLOW__SMTP__SMTP_PASSWORD: '${AIRFLOW_SMTP_PASSWORD}'
+    AIRFLOW__SMTP__SMTP_MAIL_FROM: '${AIRFLOW_ALERT_EMAIL}'
+    # FIX: expose correct DB credentials to all containers so nothing
+    # ever attempts to connect using a non-existent role like 'admin'.
+    POSTGRES_USER: airflow
+    POSTGRES_PASSWORD: airflow
+    POSTGRES_DB: airflow
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: '5432'
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ./data:/opt/airflow/data
+    - ./reports:/opt/airflow/reports
+    - ./setup.sh:/opt/airflow/setup.sh
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      - "5432:5432"   # Exposes DB to localhost so VS Code terminal psql works
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+      # Auto-creates ETL tables on every fresh container start
+      - ./create_tables.sql:/docker-entrypoint-initdb.d/create_tables.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # FIX: start_period gives postgres time to initialise before the
+      # healthcheck starts failing — eliminates the cold-start lock timeout.
+      start_period: 30s
+    restart: on-failure
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: always
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: always
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    restart: always
+
+  airflow-init:
+    <<: *airflow-common
+    # FIX: restart: on-failure so the init service retries cleanly if postgres
+    # isn't fully accepting connections at the exact moment it starts.
+    restart: on-failure
+    command:
+      - bash
+      - -lc
+      - airflow db migrate && airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin || true
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+
+volumes:
+  postgres-db-volume:
