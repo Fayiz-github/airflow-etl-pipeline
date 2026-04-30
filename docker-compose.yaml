@@ -6,13 +6,13 @@ x-airflow-common:
   environment:
     &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
-    AIRFLOW__CORE__FERNET_KEY: '0NJc3CZeoy24QuWo0tFFdN6kD_cd-a8rPuVMJUPKhfI='
+    AIRFLOW__CORE__FERNET_KEY: '${AIRFLOW_FERNET_KEY}'
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     # FIX: explicit lock_timeout in connection string prevents the cold-start
     # advisory lock race between the scheduler and postgres at container startup.
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow?connect_timeout=10&options=-c%20lock_timeout%3D30s
-    AIRFLOW__WEBSERVER__SECRET_KEY: 'a_very_secret_key_change_in_prod'
+    AIRFLOW__WEBSERVER__SECRET_KEY: '${AIRFLOW_WEBSERVER_SECRET_KEY}'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
     AIRFLOW__CORE__DEFAULT_TIMEZONE: UTC
     _AIRFLOW_DB_MIGRATE: 'true'
